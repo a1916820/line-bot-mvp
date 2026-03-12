@@ -1,9 +1,63 @@
 const express = require('express');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
+
+const DATA_DIR = path.join(__dirname, 'data');
+const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
+
+function ensureMemoryStore() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(MEMORY_FILE)) {
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify({ notes: [] }, null, 2), 'utf8');
+  }
+}
+
+function loadMemory() {
+  ensureMemoryStore();
+  try {
+    return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+  } catch (e) {
+    return { notes: [] };
+  }
+}
+
+function saveMemory(data) {
+  ensureMemoryStore();
+  fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function addMemory(content) {
+  const data = loadMemory();
+  const note = {
+    id: Date.now(),
+    content: content.trim(),
+    createdAt: new Date().toISOString(),
+    scope: 'private_instruction'
+  };
+  data.notes.push(note);
+  saveMemory(data);
+  return note;
+}
+
+function listMemories() {
+  const data = loadMemory();
+  return data.notes || [];
+}
+
+function removeMemory(content) {
+  const data = loadMemory();
+  const before = data.notes.length;
+  data.notes = data.notes.filter(note => note.content !== content.trim());
+  saveMemory(data);
+  return before !== data.notes.length;
+}
 
 function isGroupContext(event) {
   return event.source?.type === 'group' || event.source?.type === 'room';
@@ -84,21 +138,45 @@ app.post('/webhook/line', async (req, res) => {
 
       const inGroup = isGroupContext(event);
 
-      // 群組模式：只有被點名或明確要求整理時才回
       if (inGroup && !isMentionedOrDirectCommand(userText)) {
         continue;
       }
 
       let replyText = '我是 G，已成功連線。';
 
-      if (/^(hi|hello|你好|哈囉|在嗎)$/i.test(userText)) {
+      // 記憶功能：只允許私訊使用
+      if (!inGroup && /^(g\s*)?記住[:：]?/i.test(userText)) {
+        const body = extractBodyAfterCommand(userText, /^(g\s*)?記住[:：]?\s*/i);
+        if (!body) {
+          replyText = '請用這個格式：\nG 記住：\n（要我記住的內容）';
+        } else {
+          const note = addMemory(body);
+          replyText = `已記住這條資訊。\n- ${note.content}`;
+        }
+      } else if (!inGroup && /^(g\s*)?(顯示記憶|我記住了什麼)/i.test(userText)) {
+        const notes = listMemories();
+        if (!notes.length) {
+          replyText = '目前沒有已儲存的記憶。';
+        } else {
+          const lines = notes.slice(-10).map((note, idx) => `${idx + 1}. ${note.content}`);
+          replyText = `目前記憶：\n${lines.join('\n')}`;
+        }
+      } else if (!inGroup && /^(g\s*)?忘記[:：]?/i.test(userText)) {
+        const body = extractBodyAfterCommand(userText, /^(g\s*)?忘記[:：]?\s*/i);
+        if (!body) {
+          replyText = '請用這個格式：\nG 忘記：\n（要刪除的內容）';
+        } else {
+          const removed = removeMemory(body);
+          replyText = removed ? '已移除這條記憶。' : '找不到相符的記憶內容。';
+        }
+      } else if (/^(hi|hello|你好|哈囉|在嗎)$/i.test(userText)) {
         replyText = inGroup
           ? '我在。若需要我整理群組內容，請直接用：G 幫我整理。'
           : '嗨，我是 G，已成功連線。';
       } else if (/^(help|你可以做什麼|你是誰)$/i.test(userText)) {
         replyText = inGroup
           ? '我是 G，公司總助理。\n群組中可叫我：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論'
-          : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論';
+          : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 記住：...\n- G 顯示記憶\n- G 忘記：...';
       } else if (/^(g\s*)?幫我整理/i.test(userText) || /^(g\s*)?幫我摘要/i.test(userText)) {
         const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我整理|幫我摘要)\s*/i);
         replyText = buildSummaryFromBody(body);
@@ -136,5 +214,6 @@ app.post('/webhook/line', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
+  ensureMemoryStore();
   console.log(`SmartSimon LINE webhook running on port ${PORT}`);
 });
