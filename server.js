@@ -9,20 +9,57 @@ function isGroupContext(event) {
   return event.source?.type === 'group' || event.source?.type === 'room';
 }
 
+function normalizeText(text = '') {
+  return text.replace(/\r/g, '').trim();
+}
+
 function isMentionedOrDirectCommand(text = '') {
-  return /smartsimon|@smartsimon|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼/i.test(text);
+  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼/i.test(text);
 }
 
-function buildSummaryTemplate() {
-  return '群組重點\n- 請貼上要整理的內容\n- 我會幫你整理成條列\n\n目前結論\n- 待補';
+function extractBodyAfterCommand(text = '', commandRegex) {
+  const cleaned = normalizeText(text);
+  const match = cleaned.match(commandRegex);
+  if (!match) return '';
+  return cleaned.slice(match[0].length).trim();
 }
 
-function buildTodoTemplate() {
-  return '待辦事項\n- [ ] 請貼上要整理的內容\n- [ ] 我會幫你列出下一步\n\n負責人\n- 未明確\n\n下一步\n- 待補';
+function linesFromBody(body = '') {
+  return body
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
-function buildConclusionTemplate() {
-  return '本段結論\n- 請貼上要整理的內容\n- 我會幫你收斂結論\n\n未解問題\n- 待補';
+function buildSummaryFromBody(body = '') {
+  const lines = linesFromBody(body);
+  if (!lines.length) {
+    return '請用以下格式傳給我：\nG 幫我整理\n（貼上要整理的內容）';
+  }
+
+  const bullets = lines.slice(0, 5).map(line => `- ${line}`).join('\n');
+  return `重點摘要\n${bullets}\n\n關鍵結論\n- 已整理以上重點\n\n補充說明\n- 若需要，我可以再幫你列待辦或抓結論。`;
+}
+
+function buildTodoFromBody(body = '') {
+  const lines = linesFromBody(body);
+  if (!lines.length) {
+    return '請用以下格式傳給我：\nG 幫我列待辦\n（貼上要整理的內容）';
+  }
+
+  const bullets = lines.slice(0, 5).map(line => `- [ ] ${line}`).join('\n');
+  return `待辦事項\n${bullets}\n\n負責人\n- 未明確\n\n下一步\n- 如需，我可以再幫你整理責任人與優先順序。`;
+}
+
+function buildConclusionFromBody(body = '') {
+  const lines = linesFromBody(body);
+  if (!lines.length) {
+    return '請用以下格式傳給我：\nG 幫我抓結論\n（貼上要整理的內容）';
+  }
+
+  const bullets = lines.slice(0, 3).map(line => `- ${line}`).join('\n');
+  return `本段結論\n${bullets}\n\n未解問題\n- 若需要，我可以進一步幫你補成待辦事項。`;
 }
 
 app.get('/', (req, res) => {
@@ -41,7 +78,7 @@ app.post('/webhook/line', async (req, res) => {
       if (event.type !== 'message') continue;
       if (event.message?.type !== 'text') continue;
 
-      const userText = (event.message.text || '').trim();
+      const userText = normalizeText(event.message.text || '');
       const replyToken = event.replyToken;
       if (!replyToken) continue;
 
@@ -52,28 +89,27 @@ app.post('/webhook/line', async (req, res) => {
         continue;
       }
 
-      let replyText = '我是 SmartSimon，已成功連線。';
+      let replyText = '我是 G，已成功連線。';
 
       if (/^(hi|hello|你好|哈囉|在嗎)$/i.test(userText)) {
         replyText = inGroup
-          ? '我在。若需要我整理群組重點，請直接說：幫我整理剛剛重點。'
-          : '嗨，我是 SmartSimon，已成功連線。';
+          ? '我在。若需要我整理群組內容，請直接用：G 幫我整理。'
+          : '嗨，我是 G，已成功連線。';
       } else if (/^(help|你可以做什麼|你是誰)$/i.test(userText)) {
         replyText = inGroup
-          ? '我是 SmartSimon，公司總助理。\n群組中可叫我：\n- 幫我整理剛剛重點\n- 幫我列待辦\n- 幫我抓結論'
-          : '我是 SmartSimon，公司總助理。\n目前可用功能：\n- 幫我摘要\n- 幫我列待辦\n- 幫我整理重點';
-      } else if (userText.includes('幫我摘要') || userText.includes('幫我整理重點') || userText.includes('幫我整理剛剛重點')) {
-        replyText = inGroup
-          ? buildSummaryTemplate()
-          : '收到。你可以直接貼上要整理的內容，我會幫你摘要成重點。';
-      } else if (userText.includes('幫我列待辦') || userText.includes('整理待辦') || userText.includes('誰負責什麼')) {
-        replyText = inGroup
-          ? buildTodoTemplate()
-          : '收到。請把內容貼給我，我會幫你整理成待辦事項與下一步。';
-      } else if (userText.includes('幫我抓結論') || userText.includes('總結一下') || userText.includes('幫我收斂')) {
-        replyText = buildConclusionTemplate();
+          ? '我是 G，公司總助理。\n群組中可叫我：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論'
+          : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論';
+      } else if (/^(g\s*)?幫我整理/i.test(userText) || /^(g\s*)?幫我摘要/i.test(userText)) {
+        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我整理|幫我摘要)\s*/i);
+        replyText = buildSummaryFromBody(body);
+      } else if (/^(g\s*)?(幫我列待辦|整理待辦|誰負責什麼)/i.test(userText)) {
+        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我列待辦|整理待辦|誰負責什麼)\s*/i);
+        replyText = buildTodoFromBody(body);
+      } else if (/^(g\s*)?(幫我抓結論|總結一下|幫我收斂)/i.test(userText)) {
+        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我抓結論|總結一下|幫我收斂)\s*/i);
+        replyText = buildConclusionFromBody(body);
       } else if (inGroup) {
-        replyText = '我可以幫你整理群組內容。你可以直接說：幫我整理剛剛重點、幫我列待辦、幫我抓結論。';
+        replyText = '你可以直接這樣叫我：\nG 幫我整理\n（貼上內容）\n\n或\nG 幫我列待辦\n（貼上內容）';
       }
 
       await axios.post(
