@@ -109,7 +109,29 @@ function extractBodyAfterCommand(text = '', commandRegex) {
   const cleaned = normalizeText(text);
   const match = cleaned.match(commandRegex);
   if (!match) return '';
-  return cleaned.slice(match[0].length).trim();
+  return cleaned.slice(match.index + match[0].length).trim();
+}
+
+function extractCommandBodyFlexible(text = '', keywords = []) {
+  const cleaned = normalizeText(text);
+  const lines = cleaned.split('\n');
+
+  if (lines.length > 1) {
+    const firstLine = lines[0];
+    const hit = keywords.some(keyword => firstLine.includes(keyword));
+    if (hit) {
+      return lines.slice(1).join('\n').trim();
+    }
+  }
+
+  for (const keyword of keywords) {
+    const idx = cleaned.indexOf(keyword);
+    if (idx !== -1) {
+      return cleaned.slice(idx + keyword.length).trim();
+    }
+  }
+
+  return '';
 }
 
 function linesFromBody(body = '') {
@@ -218,17 +240,17 @@ app.post('/webhook/line', async (req, res) => {
         replyText = inGroup
           ? '我是 G，公司總助理。\n群組中可叫我：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 幫我回答'
           : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 記住：...\n- G 顯示記憶\n- G 忘記：...';
-      } else if (/^(g\s*)?幫我回答/i.test(userText) || /^(g\s*)?用之前的說法回答/i.test(userText) || /^(g\s*)?這題有記憶嗎/i.test(userText)) {
-        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我回答|用之前的說法回答|這題有記憶嗎)\s*/i);
+      } else if (userText.includes('幫我回答') || userText.includes('用之前的說法回答') || userText.includes('這題有記憶嗎')) {
+        const body = extractCommandBodyFlexible(userText, ['幫我回答', '用之前的說法回答', '這題有記憶嗎']);
         replyText = buildMemoryAnswer(body);
-      } else if (/^(g\s*)?幫我整理/i.test(userText) || /^(g\s*)?幫我摘要/i.test(userText)) {
-        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我整理|幫我摘要)\s*/i);
+      } else if (userText.includes('幫我整理') || userText.includes('幫我摘要')) {
+        const body = extractCommandBodyFlexible(userText, ['幫我整理', '幫我摘要']);
         replyText = buildSummaryFromBody(body);
-      } else if (/^(g\s*)?(幫我列待辦|整理待辦|誰負責什麼)/i.test(userText)) {
-        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我列待辦|整理待辦|誰負責什麼)\s*/i);
+      } else if (userText.includes('幫我列待辦') || userText.includes('整理待辦') || userText.includes('誰負責什麼')) {
+        const body = extractCommandBodyFlexible(userText, ['幫我列待辦', '整理待辦', '誰負責什麼']);
         replyText = buildTodoFromBody(body);
-      } else if (/^(g\s*)?(幫我抓結論|總結一下|幫我收斂)/i.test(userText)) {
-        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我抓結論|總結一下|幫我收斂)\s*/i);
+      } else if (userText.includes('幫我抓結論') || userText.includes('總結一下') || userText.includes('幫我收斂')) {
+        const body = extractCommandBodyFlexible(userText, ['幫我抓結論', '總結一下', '幫我收斂']);
         replyText = buildConclusionFromBody(body);
       } else if (inGroup) {
         replyText = '你可以直接這樣叫我：\nG 幫我整理\n（貼上內容）\n\nG 幫我列待辦\n（貼上內容）\n\nG 幫我回答\n（貼上問題）';
