@@ -304,47 +304,93 @@ function extractTitleFromHtml(html = '') {
   return match ? stripHtml(match[1]) : '';
 }
 
+function cleanProductText(text = '') {
+  return (text || '')
+    .replace(/\r/g, '')
+    .replace(/\t/g, ' ')
+    .replace(/[ ]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function removeNoiseLines(text = '') {
+  const noisePatterns = [
+    /加入購物車|立即購買|收藏商品|客服|物流|發貨|付款|優惠|活動|退貨|運費|支付|推薦|店鋪|賣家/i,
+    /7天|48小時|包郵|運費險|跨店/i
+  ];
+
+  return cleanProductText(text)
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => !noisePatterns.some(pattern => pattern.test(line)))
+    .join('\n');
+}
+
 function extractFabric(text = '') {
-  const match = text.match(/(?:材質|面料|Fabric)[:：]?\s*([^\n。；;]+)/i);
-  return match ? match[1].trim() : '';
+  const cleaned = removeNoiseLines(text);
+  const match = cleaned.match(/(?:材質成分|材質|面料|Fabric)[:：]?\s*([^\n。；;]+)/i);
+  if (!match) return '';
+
+  return match[1]
+    .replace(/,/g, ' / ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function extractSizeList(text = '') {
-  const matches = text.match(/\b(?:XS|S|M|L|XL|2XL|3XL|F)\b/gi) || [];
+  const cleaned = removeNoiseLines(text);
+  const matches = cleaned.match(/\b(?:XS|S|M|L|XL|2XL|3XL|F)\b/gi) || [];
   const unique = [...new Set(matches.map(s => s.toUpperCase()))];
   return unique.join('/');
 }
 
 function extractSizeInfo(text = '') {
-  const lines = text
+  const lines = removeNoiseLines(text)
     .split(/\n|。/)
     .map(line => line.trim())
-    .filter(line => /(胸圍|肩寬|衣長|長度|袖長|腰圍|臀圍)/.test(line))
-    .slice(0, 8);
+    .filter(line => /(胸圍|肩寬|衣長|長度|袖長|腰圍|臀圍|下擺)/.test(line))
+    .slice(0, 10);
 
   return lines.join('\n');
 }
 
 function extractModelInfo(text = '') {
-  const lines = text
+  const lines = removeNoiseLines(text)
     .split(/\n|。/)
     .map(line => line.trim())
-    .filter(line => /(模特|MODEL|身高|體重|試穿)/i.test(line))
-    .slice(0, 3);
+    .filter(line => /(模特|MODEL|身高|體重|試穿|著用|示範)/i.test(line))
+    .slice(0, 3)
+    .map(line => line.replace(/\s+/g, ' '));
 
   return lines.join('\n');
 }
 
+function buildProductInfo(title = '', text = '') {
+  const cleanedTitle = cleanProductText(title).replace(/[|｜_]+/g, ' ').trim();
+  if (cleanedTitle) return cleanedTitle;
+
+  const lines = removeNoiseLines(text)
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => line.length >= 8)
+    .slice(0, 3);
+
+  return lines.join('，').slice(0, 120);
+}
+
 function parseProductFieldsFromText(text = '', title = '', platform = '') {
-  const cleanText = (text || '').replace(/\s+/g, ' ').trim();
-  const productInfo = title || cleanText.slice(0, 120);
+  const cleanedRawText = cleanProductText(text);
+  const filteredText = removeNoiseLines(cleanedRawText);
+  const productInfo = buildProductInfo(title, filteredText) || cleanedRawText.slice(0, 120);
 
   return {
     productInfo,
-    fabric: extractFabric(cleanText),
-    sizeList: extractSizeList(cleanText),
-    sizeInfo: extractSizeInfo(text),
-    modelInfo: extractModelInfo(text),
+    fabric: extractFabric(filteredText),
+    sizeList: extractSizeList(filteredText),
+    sizeInfo: extractSizeInfo(filteredText),
+    modelInfo: extractModelInfo(filteredText),
     sourcePlatform: platform
   };
 }
