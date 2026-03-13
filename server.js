@@ -172,8 +172,20 @@ function buildConclusionFromBody(body = '') {
   return `本段結論\n${bullets}\n\n未解問題\n- 若需要，我可以進一步幫你補成待辦事項。`;
 }
 
-function buildMemoryAnswer(question = '') {
+function buildMemoryAnswer(question = '', debug = false) {
+  const notes = listMemories();
   const best = findBestMemory(question);
+
+  if (debug) {
+    return [
+      'DEBUG',
+      `- question: ${question || '(empty)'}`,
+      `- memory_count: ${notes.length}`,
+      `- matched: ${best ? 'yes' : 'no'}`,
+      `- best_match: ${best ? best.content : '(none)'}`
+    ].join('\n');
+  }
+
   if (!best) {
     return '目前找不到相符的既有記憶。\n如果你要，我可以先幫你整理一版建議回覆。';
   }
@@ -242,7 +254,8 @@ app.post('/webhook/line', async (req, res) => {
           : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 記住：...\n- G 顯示記憶\n- G 忘記：...';
       } else if (userText.includes('幫我回答') || userText.includes('用之前的說法回答') || userText.includes('這題有記憶嗎')) {
         const body = extractCommandBodyFlexible(userText, ['幫我回答', '用之前的說法回答', '這題有記憶嗎']);
-        replyText = buildMemoryAnswer(body);
+        const debugMode = userText.includes('debug');
+        replyText = buildMemoryAnswer(body, debugMode);
       } else if (userText.includes('幫我整理') || userText.includes('幫我摘要')) {
         const body = extractCommandBodyFlexible(userText, ['幫我整理', '幫我摘要']);
         replyText = buildSummaryFromBody(body);
