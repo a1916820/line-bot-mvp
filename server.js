@@ -62,15 +62,49 @@ function removeMemory(content) {
 function scoreMemoryMatch(question = '', memoryContent = '') {
   const q = question.toLowerCase();
   const m = memoryContent.toLowerCase();
+
   const tokens = q
     .split(/[^\p{L}\p{N}]+/u)
     .map(t => t.trim())
-    .filter(t => t.length >= 2);
+    .filter(Boolean);
+
+  const bigrams = [];
+  for (let i = 0; i < q.length - 1; i++) {
+    const bg = q.slice(i, i + 2).trim();
+    if (bg && !/\s/.test(bg)) bigrams.push(bg);
+  }
+
+  const keywordGroups = [
+    ['客服', '客人', '訊息'],
+    ['回覆', '回應', '回答'],
+    ['多久', '時間', '幾小時', '幾天', '何時'],
+    ['成本', '報價', '價格'],
+    ['蝦皮', 'shopee'],
+    ['shopify', '訂單'],
+    ['退貨', '退款'],
+    ['上架', '刊登']
+  ];
 
   let score = 0;
+
   for (const token of tokens) {
-    if (m.includes(token)) score += 1;
+    if (token.length >= 2 && m.includes(token)) score += 2;
+    if (token.length === 1 && m.includes(token)) score += 0.5;
   }
+
+  for (const bg of bigrams) {
+    if (m.includes(bg)) score += 1;
+  }
+
+  for (const group of keywordGroups) {
+    const qHit = group.some(word => q.includes(word));
+    const mHit = group.some(word => m.includes(word));
+    if (qHit && mHit) score += 3;
+  }
+
+  if (q.includes('客服') && m.includes('客服')) score += 3;
+  if ((q.includes('多久') || q.includes('時間')) && (m.includes('回覆') || m.includes('時間'))) score += 3;
+
   return score;
 }
 
