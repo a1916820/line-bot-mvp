@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { chromium } = require('playwright');
 require('dotenv').config();
 
 const app = express();
@@ -9,6 +10,7 @@ app.use(express.json());
 
 const DATA_DIR = path.join(__dirname, 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
+const PLAYWRIGHT_PROFILE_DIR = path.join(__dirname, 'playwright-profile');
 
 function ensureMemoryStore() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -253,6 +255,40 @@ async function fetchRawPage(url = '') {
   return response.data || '';
 }
 
+async function fetchProductPageWithPlaywright(url = '') {
+  const context = await chromium.launchPersistentContext(PLAYWRIGHT_PROFILE_DIR, {
+    headless: true
+  });
+
+  try {
+    let page = context.pages()[0];
+    if (!page) {
+      page = await context.newPage();
+    }
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000
+    });
+
+    await page.waitForTimeout(5000);
+
+    const title = await page.title();
+    const currentUrl = page.url();
+    const bodyText = await page.evaluate(() => {
+      return document.body ? document.body.innerText : '';
+    });
+
+    return {
+      title,
+      currentUrl,
+      bodyText: bodyText || ''
+    };
+  } finally {
+    await context.close();
+  }
+}
+
 function stripHtml(html = '') {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -299,19 +335,24 @@ function extractModelInfo(text = '') {
   return lines.join('\n');
 }
 
-function parseProductFields(html = '', platform = '') {
-  const text = stripHtml(html);
-  const title = extractTitleFromHtml(html);
-  const productInfo = title || text.slice(0, 120);
+function parseProductFieldsFromText(text = '', title = '', platform = '') {
+  const cleanText = (text || '').replace(/\s+/g, ' ').trim();
+  const productInfo = title || cleanText.slice(0, 120);
 
   return {
     productInfo,
-    fabric: extractFabric(text),
-    sizeList: extractSizeList(text),
+    fabric: extractFabric(cleanText),
+    sizeList: extractSizeList(cleanText),
     sizeInfo: extractSizeInfo(text),
     modelInfo: extractModelInfo(text),
     sourcePlatform: platform
   };
+}
+
+function parseProductFields(html = '', platform = '') {
+  const text = stripHtml(html);
+  const title = extractTitleFromHtml(html);
+  return parseProductFieldsFromText(text, title, platform);
 }
 
 function normalizeProductData(data = {}) {
@@ -325,9 +366,20 @@ function normalizeProductData(data = {}) {
 }
 
 async function fetchProductData(url = '', platform = '') {
-  const html = await fetchRawPage(url);
-  const parsed = parseProductFields(html, platform);
-  return normalizeProductData(parsed);
+  try {
+    const pageData = await fetchProductPageWithPlaywright(url);
+
+    if (/登錄|登录/i.test(pageData.title) || /login/i.test(pageData.currentUrl)) {
+      throw new Error('LOGIN_REQUIRED');
+    }
+
+    const parsed = parseProductFieldsFromText(pageData.bodyText, pageData.title, platform);
+    return normalizeProductData(parsed);
+  } catch (error) {
+    const html = await fetchRawPage(url);
+    const parsed = parseProductFields(html, platform);
+    return normalizeProductData(parsed);
+  }
 }
 
 function buildGubanProductTemplate(data = {}) {
