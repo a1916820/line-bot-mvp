@@ -59,6 +59,40 @@ function removeMemory(content) {
   return before !== data.notes.length;
 }
 
+function scoreMemoryMatch(question = '', memoryContent = '') {
+  const q = question.toLowerCase();
+  const m = memoryContent.toLowerCase();
+  const tokens = q
+    .split(/[^\p{L}\p{N}]+/u)
+    .map(t => t.trim())
+    .filter(t => t.length >= 2);
+
+  let score = 0;
+  for (const token of tokens) {
+    if (m.includes(token)) score += 1;
+  }
+  return score;
+}
+
+function findBestMemory(question = '') {
+  const notes = listMemories();
+  if (!notes.length) return null;
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const note of notes) {
+    const score = scoreMemoryMatch(question, note.content);
+    if (score > bestScore) {
+      bestScore = score;
+      best = note;
+    }
+  }
+
+  if (!best || bestScore === 0) return null;
+  return best;
+}
+
 function isGroupContext(event) {
   return event.source?.type === 'group' || event.source?.type === 'room';
 }
@@ -68,7 +102,7 @@ function normalizeText(text = '') {
 }
 
 function isMentionedOrDirectCommand(text = '') {
-  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼/i.test(text);
+  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼|幫我回答|用之前的說法回答|這題有記憶嗎/i.test(text);
 }
 
 function extractBodyAfterCommand(text = '', commandRegex) {
@@ -116,6 +150,14 @@ function buildConclusionFromBody(body = '') {
   return `本段結論\n${bullets}\n\n未解問題\n- 若需要，我可以進一步幫你補成待辦事項。`;
 }
 
+function buildMemoryAnswer(question = '') {
+  const best = findBestMemory(question);
+  if (!best) {
+    return '目前找不到相符的既有記憶。\n如果你要，我可以先幫你整理一版建議回覆。';
+  }
+  return `根據目前既有口徑：\n- ${best.content}`;
+}
+
 app.get('/', (req, res) => {
   res.status(200).send('SmartSimon LINE webhook is running');
 });
@@ -144,7 +186,6 @@ app.post('/webhook/line', async (req, res) => {
 
       let replyText = '我是 G，已成功連線。';
 
-      // 記憶功能：只允許私訊使用
       if (!inGroup && /^(g\s*)?記住[:：]?/i.test(userText)) {
         const body = extractBodyAfterCommand(userText, /^(g\s*)?記住[:：]?\s*/i);
         if (!body) {
@@ -175,8 +216,11 @@ app.post('/webhook/line', async (req, res) => {
           : '嗨，我是 G，已成功連線。';
       } else if (/^(help|你可以做什麼|你是誰)$/i.test(userText)) {
         replyText = inGroup
-          ? '我是 G，公司總助理。\n群組中可叫我：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論'
+          ? '我是 G，公司總助理。\n群組中可叫我：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 幫我回答'
           : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 記住：...\n- G 顯示記憶\n- G 忘記：...';
+      } else if (/^(g\s*)?幫我回答/i.test(userText) || /^(g\s*)?用之前的說法回答/i.test(userText) || /^(g\s*)?這題有記憶嗎/i.test(userText)) {
+        const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我回答|用之前的說法回答|這題有記憶嗎)\s*/i);
+        replyText = buildMemoryAnswer(body);
       } else if (/^(g\s*)?幫我整理/i.test(userText) || /^(g\s*)?幫我摘要/i.test(userText)) {
         const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我整理|幫我摘要)\s*/i);
         replyText = buildSummaryFromBody(body);
@@ -187,7 +231,7 @@ app.post('/webhook/line', async (req, res) => {
         const body = extractBodyAfterCommand(userText, /^(g\s*)?(幫我抓結論|總結一下|幫我收斂)\s*/i);
         replyText = buildConclusionFromBody(body);
       } else if (inGroup) {
-        replyText = '你可以直接這樣叫我：\nG 幫我整理\n（貼上內容）\n\n或\nG 幫我列待辦\n（貼上內容）';
+        replyText = '你可以直接這樣叫我：\nG 幫我整理\n（貼上內容）\n\nG 幫我列待辦\n（貼上內容）\n\nG 幫我回答\n（貼上問題）';
       }
 
       await axios.post(
