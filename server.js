@@ -136,7 +136,7 @@ function normalizeText(text = '') {
 }
 
 function isMentionedOrDirectCommand(text = '') {
-  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼|幫我回答|用之前的說法回答|這題有記憶嗎/i.test(text);
+  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼|幫我回答|用之前的說法回答|這題有記憶嗎|幫我生成文案|生成文案|幫我整理商品文案/i.test(text);
 }
 
 function extractBodyAfterCommand(text = '', commandRegex) {
@@ -226,6 +226,120 @@ function buildMemoryAnswer(question = '', debug = false) {
   return `根據目前既有口徑：\n- ${best.content}`;
 }
 
+function isGenerateCopyCommand(text = '') {
+  return text.includes('幫我生成文案') || text.includes('生成文案') || text.includes('幫我整理商品文案');
+}
+
+function extractFirstUrl(text = '') {
+  const match = text.match(/https?:\/\/[^\s]+/i);
+  return match ? match[0] : '';
+}
+
+function detectProductPlatform(url = '') {
+  if (/item\.taobao\.com/i.test(url)) return 'taobao';
+  if (/detail\.1688\.com/i.test(url)) return '1688';
+  return null;
+}
+
+async function fetchRawPage(url = '') {
+  const response = await axios.get(url, {
+    timeout: 15000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8'
+    }
+  });
+
+  return response.data || '';
+}
+
+function stripHtml(html = '') {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractTitleFromHtml(html = '') {
+  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return match ? stripHtml(match[1]) : '';
+}
+
+function extractFabric(text = '') {
+  const match = text.match(/(?:材質|面料|Fabric)[:：]?\s*([^\n。；;]+)/i);
+  return match ? match[1].trim() : '';
+}
+
+function extractSizeList(text = '') {
+  const matches = text.match(/\b(?:XS|S|M|L|XL|2XL|3XL|F)\b/gi) || [];
+  const unique = [...new Set(matches.map(s => s.toUpperCase()))];
+  return unique.join('/');
+}
+
+function extractSizeInfo(text = '') {
+  const lines = text
+    .split(/\n|。/)
+    .map(line => line.trim())
+    .filter(line => /(胸圍|肩寬|衣長|長度|袖長|腰圍|臀圍)/.test(line))
+    .slice(0, 8);
+
+  return lines.join('\n');
+}
+
+function extractModelInfo(text = '') {
+  const lines = text
+    .split(/\n|。/)
+    .map(line => line.trim())
+    .filter(line => /(模特|MODEL|身高|體重|試穿)/i.test(line))
+    .slice(0, 3);
+
+  return lines.join('\n');
+}
+
+function parseProductFields(html = '', platform = '') {
+  const text = stripHtml(html);
+  const title = extractTitleFromHtml(html);
+  const productInfo = title || text.slice(0, 120);
+
+  return {
+    productInfo,
+    fabric: extractFabric(text),
+    sizeList: extractSizeList(text),
+    sizeInfo: extractSizeInfo(text),
+    modelInfo: extractModelInfo(text),
+    sourcePlatform: platform
+  };
+}
+
+function normalizeProductData(data = {}) {
+  return {
+    productInfo: data.productInfo || '請補商品描述',
+    fabric: data.fabric || '請補充',
+    sizeList: data.sizeList || '請補充',
+    sizeInfo: data.sizeInfo || '請補尺寸資訊',
+    modelInfo: data.modelInfo || ''
+  };
+}
+
+async function fetchProductData(url = '', platform = '') {
+  const html = await fetchRawPage(url);
+  const parsed = parseProductFields(html, platform);
+  return normalizeProductData(parsed);
+}
+
+function buildGubanProductTemplate(data = {}) {
+  const productInfo = data.productInfo || '請補商品描述';
+  const fabric = data.fabric || '請補充';
+  const sizeList = data.sizeList || '請補充';
+  const sizeInfo = data.sizeInfo || '請補尺寸資訊';
+  const modelInfo = data.modelInfo || '';
+
+  return `PRODUCT INFO\n${productInfo}\n材質Fabric：${fabric}\n尺寸Size : ${sizeList}\n\nSize Info\n${sizeInfo}\n\n模特資訊 MODEL INFO ：\n${modelInfo}\n\n\n＝＝＝＝＝＝＝＝＝＝＝＝＝＝\n\n歡迎光臨GUBAN\n\n我們很喜歡與人聊天！所以下單前可以私訊小編～\n告訴我們你目前煩惱的問題！\n\n如有任何問題歡迎詢問\n官方LINE ID : @102rxpce (要加@呦～)\nIG : guban_store\n回覆時間 : 11:00-20:00\n有其他商品的問題，也歡迎詢問小編～`;
+}
+
 app.get('/', (req, res) => {
   res.status(200).send('SmartSimon LINE webhook is running');
 });
@@ -286,6 +400,23 @@ app.post('/webhook/line', async (req, res) => {
         replyText = inGroup
           ? '我是 G，公司總助理。\n群組中可叫我：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 幫我回答'
           : '我是 G，公司總助理。\n目前可用功能：\n- G 幫我整理\n- G 幫我列待辦\n- G 幫我抓結論\n- G 記住：...\n- G 顯示記憶\n- G 忘記：...';
+      } else if (isGenerateCopyCommand(userText)) {
+        const url = extractFirstUrl(userText);
+        if (!url) {
+          replyText = '請貼上淘寶或 1688 商品連結，我再幫你生成文案。';
+        } else {
+          const platform = detectProductPlatform(url);
+          if (!platform) {
+            replyText = '目前僅支援淘寶與 1688 商品連結。';
+          } else {
+            try {
+              const productData = await fetchProductData(url, platform);
+              replyText = buildGubanProductTemplate(productData);
+            } catch (e) {
+              replyText = '目前無法直接抓取這個商品連結，可能需要登入權限或頁面限制。';
+            }
+          }
+        }
       } else if (userText.includes('幫我回答') || userText.includes('用之前的說法回答') || userText.includes('這題有記憶嗎')) {
         const body = extractCommandBodyFlexible(userText, ['幫我回答', '用之前的說法回答', '這題有記憶嗎']);
         const debugMode = userText.includes('debug');
