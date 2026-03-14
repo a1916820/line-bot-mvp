@@ -759,9 +759,23 @@ app.post('/webhook/line', async (req, res) => {
       let replyText = '我是 G，已成功連線。';
       let listingSession = loadListingSession();
 
-      if (/^g上架$/i.test(userText)) {
+      if (/^g上架(\s+debug)?$/i.test(userText)) {
+        const debugMode = /\s+debug$/i.test(userText);
         listingSession = createListingSession();
-        replyText = '好的，已開始整理上架資料。\n\n請把商品資料陸續傳給我，可以一次傳多筆。\n每筆建議提供以下資訊：\n1. 商品名稱\n2. 售價\n3. 商品描述\n4. 材質\n5. 尺寸\n6. 尺寸資訊\n7. 顏色\n8. 庫存\n9. 分類\n10. 圖片素材（可貼連結或直接上傳圖片）\n\n切換下一筆請輸入：G下一筆\n完成後可輸入：\n- G 查看目前商品\n- G 檢查缺漏\n- G 生成蝦皮上架\n- G 生成Shopify上架';
+        if (debugMode) {
+          const reloadedSession = loadListingSession();
+          replyText = [
+            'DEBUG',
+            `- createdSessionMode: ${listingSession?.sessionMode || '(none)'}`,
+            `- createdCurrentDraftId: ${listingSession?.currentDraftId || '(none)'}`,
+            `- createdProductsCount: ${listingSession?.products?.length || 0}`,
+            `- reloadedSessionMode: ${reloadedSession?.sessionMode || '(none)'}`,
+            `- reloadedCurrentDraftId: ${reloadedSession?.currentDraftId || '(none)'}`,
+            `- reloadedProductsCount: ${reloadedSession?.products?.length || 0}`
+          ].join('\n');
+        } else {
+          replyText = '好的，已開始整理上架資料。\n\n請把商品資料陸續傳給我，可以一次傳多筆。\n每筆建議提供以下資訊：\n1. 商品名稱\n2. 售價\n3. 商品描述\n4. 材質\n5. 尺寸\n6. 尺寸資訊\n7. 顏色\n8. 庫存\n9. 分類\n10. 圖片素材（可貼連結或直接上傳圖片）\n\n切換下一筆請輸入：G下一筆\n完成後可輸入：\n- G 查看目前商品\n- G 檢查缺漏\n- G 生成蝦皮上架\n- G 生成Shopify上架';
+        }
       } else if (/^g下一筆$/i.test(userText)) {
         if (!isListingBatchMode(listingSession)) {
           replyText = '如果你要開始整理上架資料，請先輸入：G上架';
