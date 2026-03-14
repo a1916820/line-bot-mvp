@@ -9,6 +9,7 @@ const app = express();
 app.use(express.json());
 
 const DATA_DIR = path.join(__dirname, 'data');
+const EXPORT_DIR = path.join(DATA_DIR, 'exports');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const LISTING_SESSION_FILE = path.join(DATA_DIR, 'listing-session.json');
 const PLAYWRIGHT_PROFILE_DIR = path.join(__dirname, 'playwright-profile');
@@ -22,6 +23,9 @@ function ensureMemoryStore() {
   }
   if (!fs.existsSync(LISTING_SESSION_FILE)) {
     fs.writeFileSync(LISTING_SESSION_FILE, JSON.stringify({ sessionMode: null }, null, 2), 'utf8');
+  }
+  if (!fs.existsSync(EXPORT_DIR)) {
+    fs.mkdirSync(EXPORT_DIR, { recursive: true });
   }
 }
 
@@ -319,6 +323,75 @@ function formatMissingReport(session) {
   }
   saveListingSession(session);
   return lines.join('\n').trim();
+}
+
+function csvEscape(value = '') {
+  const stringValue = String(value ?? '');
+  if (/[",\n]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+}
+
+function buildShopeeDescription(product) {
+  const parts = [];
+  if (product.description) parts.push(product.description);
+  if (product.fabric) parts.push(`材質：${product.fabric}`);
+  if (product.sizes) parts.push(`尺寸：${product.sizes}`);
+  if (product.sizeInfo) parts.push(`尺寸資訊：\n${product.sizeInfo}`);
+  if (product.colors) parts.push(`顏色：${product.colors}`);
+  return parts.join('\n\n').trim();
+}
+
+function toShopeeCsvRow(product) {
+  return {
+    '商品名稱': product.title || '',
+    '商品描述': buildShopeeDescription(product),
+    '價格': product.price || '',
+    '分類': product.category || '',
+    '庫存': product.stock || '',
+    '規格名稱1': product.sizes ? '尺寸' : '',
+    '規格選項1': product.sizes || '',
+    '規格名稱2': product.colors ? '顏色' : '',
+    '規格選項2': product.colors || '',
+    '圖片1': product.imageLinks?.[0] || '',
+    '圖片2': product.imageLinks?.[1] || '',
+    '圖片3': product.imageLinks?.[2] || ''
+  };
+}
+
+function generateShopeeCsv(products = []) {
+  const rows = products.map(toShopeeCsvRow);
+  const headers = [
+    '商品名稱',
+    '商品描述',
+    '價格',
+    '分類',
+    '庫存',
+    '規格名稱1',
+    '規格選項1',
+    '規格名稱2',
+    '規格選項2',
+    '圖片1',
+    '圖片2',
+    '圖片3'
+  ];
+
+  const lines = [headers.join(',')];
+  for (const row of rows) {
+    lines.push(headers.map(header => csvEscape(row[header] || '')).join(','));
+  }
+  return lines.join('\n');
+}
+
+function saveShopeeCsv(products = []) {
+  ensureMemoryStore();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const fileName = `shopee-export-${timestamp}.csv`;
+  const filePath = path.join(EXPORT_DIR, fileName);
+  const csvContent = generateShopeeCsv(products);
+  fs.writeFileSync(filePath, csvContent, 'utf8');
+  return { fileName, filePath, csvContent };
 }
 
 function formatListingDebug(session, parsed) {
@@ -808,8 +881,21 @@ app.post('/webhook/line', async (req, res) => {
         if (!isListingBatchMode(listingSession)) {
           replyText = '目前還沒有商品資料，請先輸入：G上架';
         } else {
-          const summary = getBatchSummary(listingSession);
-          replyText = `已開始生成蝦皮上架檔。\n\n本次可生成商品：\n- 完整商品：${summary.completeCount} 筆\n- 缺漏商品：${summary.incompleteCount} 筆\n\n若有缺漏，建議先輸入：\nG 檢查缺漏`;
+          for (const product of listingSession.products) {
+            product.missingFields = computeMissingFields(product);
+            product.status = computeProductStatus(product);
+          }
+          saveListingSession(listingSession);
+
+          const completeProducts = listingSession.products.filter(p => p.status === 'complete');
+          const incompleteProducts = listingSession.products.filter(p => p.status !== 'complete');
+
+          if (!completeProducts.length) {
+            replyText = '目前沒有完整商品可生成蝦皮上架檔。\n請先輸入：G 檢查缺漏';
+          } else {
+            const exportResult = saveShopeeCsv(completeProducts);
+            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n- 路徑：data/exports/${exportResult.fileName}`;
+          }
         }
       } else if (/^g 生成shopify上架$/i.test(userText)) {
         if (!isListingBatchMode(listingSession)) {
