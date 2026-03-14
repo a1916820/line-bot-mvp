@@ -329,28 +329,45 @@ function removeNoiseLines(text = '') {
 
 function extractFabric(text = '') {
   const cleaned = removeNoiseLines(text);
-  const match = cleaned.match(/(?:材質成分|材質|面料|Fabric)[:：]?\s*([^\n。；;]+)/i);
-  if (!match) return '';
+  const lines = cleaned
+    .split(/\n|。/)
+    .map(line => line.trim())
+    .filter(Boolean);
 
-  return match[1]
-    .replace(/,/g, ' / ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+  const materialKeywords = /(棉|聚酯|聚酯纖維|滌綸|氨綸|彈力纖維|針織|羊毛|毛呢|尼龍|錦綸|麻|亞麻|丹寧|牛仔|人造棉|嫘縈|莫代爾|viscose|polyester|cotton|spandex)/i;
+
+  for (const line of lines) {
+    if (/(材質成分|材質|面料|Fabric)/i.test(line) && materialKeywords.test(line)) {
+      return line
+        .replace(/^(材質成分|材質|面料|Fabric)[:：]?/i, '')
+        .replace(/,/g, ' / ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+    }
+  }
+
+  const match = cleaned.match(/((?:棉|聚酯纖維|聚酯|滌綸|氨綸|尼龍|錦綸|麻|亞麻|嫘縈|莫代爾)[^\n。；;]{0,30}%?[^\n。；;]{0,30})/i);
+  return match ? match[1].trim() : '';
 }
 
 function extractSizeList(text = '') {
   const cleaned = removeNoiseLines(text);
   const matches = cleaned.match(/\b(?:XS|S|M|L|XL|2XL|3XL|F)\b/gi) || [];
   const unique = [...new Set(matches.map(s => s.toUpperCase()))];
-  return unique.join('/');
+  const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', 'F'];
+  const sorted = order.filter(size => unique.includes(size));
+  return sorted.join('/');
 }
 
 function extractSizeInfo(text = '') {
   const lines = removeNoiseLines(text)
     .split(/\n|。/)
     .map(line => line.trim())
+    .filter(Boolean)
     .filter(line => /(胸圍|肩寬|衣長|長度|袖長|腰圍|臀圍|下擺)/.test(line))
-    .slice(0, 10);
+    .filter(line => /(XS|S|M|L|XL|2XL|3XL|F|均碼|free)/i.test(line) || /\d/.test(line))
+    .slice(0, 10)
+    .map(line => line.replace(/[,:：]/g, ' ').replace(/\s{2,}/g, ' ').trim());
 
   return lines.join('\n');
 }

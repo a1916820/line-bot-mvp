@@ -11,6 +11,8 @@
     "axios": "^1.8.4",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "playwright": "^1.58.2"
+    "playwright": "^1.58.2",
+    "sharp": "^0.34.5",
+    "tesseract.js": "^7.0.0"
   }
 }

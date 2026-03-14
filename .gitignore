@@ -1,4 +1,7 @@
 node_modules/
 playwright-profile/
+candidate-images/
 .env
+.DS_Store
+*.traineddata
 
