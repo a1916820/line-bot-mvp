@@ -399,6 +399,27 @@ function buildCsvPreview(csvContent = '', maxLines = 6) {
   return lines.join('\n');
 }
 
+function buildShopeeReadablePreview(products = [], maxItems = 2) {
+  const items = products.slice(0, maxItems);
+  const blocks = [];
+
+  items.forEach((product, index) => {
+    blocks.push([
+      `第 ${index + 1} 筆商品`,
+      `- 商品名稱：${product.title || '未填'}`,
+      `- 價格：${product.price || '未填'}`,
+      `- 分類：${product.category || '未填'}`,
+      `- 庫存：${product.stock || '未填'}`,
+      `- 尺寸：${product.sizes || '未填'}`,
+      `- 顏色：${product.colors || '未填'}`,
+      `- 材質：${product.fabric || '未填'}`,
+      `- 圖片數：${(product.imageLinks?.length || 0) + (product.uploadedImages?.length || 0)}`
+    ].join('\n'));
+  });
+
+  return blocks.join('\n\n');
+}
+
 function formatListingDebug(session, parsed) {
   const current = getCurrentDraft(session);
   return [
@@ -899,8 +920,8 @@ app.post('/webhook/line', async (req, res) => {
             replyText = '目前沒有完整商品可生成蝦皮上架檔。\n請先輸入：G 檢查缺漏';
           } else {
             const exportResult = saveShopeeCsv(completeProducts);
-            const preview = buildCsvPreview(exportResult.csvContent, 5);
-            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n\nCSV 預覽：\n${preview}`;
+            const readablePreview = buildShopeeReadablePreview(completeProducts, 2);
+            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n\n預覽：\n${readablePreview}`;
           }
         }
       } else if (/^g 生成shopify上架$/i.test(userText)) {
