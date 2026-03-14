@@ -741,8 +741,16 @@ app.get('/health', (req, res) => {
 app.post('/webhook/line', async (req, res) => {
   try {
     const events = req.body.events || [];
+    console.log('[LINE webhook hit]', new Date().toISOString(), 'events=', events.length);
 
     for (const event of events) {
+      console.log('[LINE event]', JSON.stringify({
+        type: event.type,
+        sourceType: event.source?.type,
+        messageType: event.message?.type,
+        text: event.message?.text || null
+      }));
+
       if (event.type !== 'message') continue;
       if (event.message?.type !== 'text') continue;
 
