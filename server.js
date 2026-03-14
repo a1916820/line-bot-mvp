@@ -97,6 +97,7 @@ function createEmptyProduct(id) {
     fabric: '',
     sizes: '',
     sizeInfo: '',
+    modelInfo: '',
     colors: '',
     stock: '',
     category: '',
@@ -162,7 +163,7 @@ function updateCurrentDraft(session, patch) {
   const product = getCurrentDraft(session);
   if (!product) return session;
 
-  const fields = ['title', 'price', 'description', 'fabric', 'sizes', 'sizeInfo', 'colors', 'stock', 'category', 'notes'];
+  const fields = ['title', 'price', 'description', 'fabric', 'sizes', 'sizeInfo', 'modelInfo', 'colors', 'stock', 'category', 'notes'];
   for (const field of fields) {
     if (typeof patch[field] === 'string' && patch[field].trim()) {
       product[field] = patch[field].trim();
@@ -207,6 +208,8 @@ const LISTING_FIELD_MAP = {
   '材質': 'fabric',
   '尺寸': 'sizes',
   '尺寸資訊': 'sizeInfo',
+  '模特資訊': 'modelInfo',
+  'MODEL INFO': 'modelInfo',
   '顏色': 'colors',
   '庫存': 'stock',
   '分類': 'category',
@@ -216,6 +219,13 @@ const LISTING_FIELD_MAP = {
 
 function extractUrls(text = '') {
   return text.match(/https?:\/\/[^\s]+/g) || [];
+}
+
+function normalizeListingFieldName(fieldName = '') {
+  return fieldName
+    .replace(/^\s*\d+[.)、．]\s*/, '')
+    .replace(/^[-•]\s*/, '')
+    .trim();
 }
 
 function parseListingMessage(text = '') {
@@ -236,9 +246,9 @@ function parseListingMessage(text = '') {
     const line = rawLine.trim();
     if (!line) continue;
 
-    const match = line.match(/^([^:：]+)\s*[:：]\s*(.*)$/);
+    const match = line.match(/^(.+?)\s*[:：]\s*(.*)$/);
     if (match) {
-      const fieldName = match[1].trim();
+      const fieldName = normalizeListingFieldName(match[1]);
       const value = match[2].trim();
       const key = LISTING_FIELD_MAP[fieldName];
 
@@ -250,11 +260,11 @@ function parseListingMessage(text = '') {
           continue;
         }
 
-        if (key === 'sizeInfo') {
+        if (key === 'sizeInfo' || key === 'modelInfo') {
           if (value) {
             result.patch[key] = value;
           } else {
-            currentMultilineField = 'sizeInfo';
+            currentMultilineField = key;
             multilineBuffer = [];
           }
           continue;
@@ -282,7 +292,7 @@ function parseListingMessage(text = '') {
 }
 
 function looksLikeListingFieldMessage(text = '') {
-  return /^(商品名稱|售價|商品描述|材質|尺寸|尺寸資訊|顏色|庫存|分類|備註|圖片連結)\s*[:：]/m.test(text) || extractUrls(text).length > 0;
+  return /^(\s*\d+[.)、．]\s*)?(商品名稱|售價|商品描述|材質|尺寸|尺寸資訊|模特資訊|MODEL INFO|顏色|庫存|分類|備註|圖片連結)\s*[:：]/im.test(text) || extractUrls(text).length > 0;
 }
 
 function isListingBatchMode(session) {
@@ -298,6 +308,7 @@ function formatCurrentProduct(product) {
     `- 材質：${product.fabric || '未填'}`,
     `- 尺寸：${product.sizes || '未填'}`,
     `- 尺寸資訊：${product.sizeInfo || '未填'}`,
+    `- 模特資訊：${product.modelInfo || '未填'}`,
     `- 顏色：${product.colors || '未填'}`,
     `- 庫存：${product.stock || '未填'}`,
     `- 分類：${product.category || '未填'}`,
@@ -333,14 +344,48 @@ function csvEscape(value = '') {
   return stringValue;
 }
 
+function pickRecommendedSize(product) {
+  const rawSizes = String(product.sizes || '').split(/[\/、,\s]+/).map(s => s.trim()).filter(Boolean);
+  if (!rawSizes.length) return 'S';
+  const normalized = rawSizes.map(s => s.toUpperCase());
+  if (normalized.includes('S')) return 'S';
+  if (normalized.includes('M')) return 'M';
+  return rawSizes[0];
+}
+
+function buildAutoModelInfo(product) {
+  const recommendedSize = pickRecommendedSize(product);
+  return `160cm / 45kg，建議著 ${recommendedSize}`;
+}
+
 function buildShopeeDescription(product) {
-  const parts = [];
-  if (product.description) parts.push(product.description);
-  if (product.fabric) parts.push(`材質：${product.fabric}`);
-  if (product.sizes) parts.push(`尺寸：${product.sizes}`);
-  if (product.sizeInfo) parts.push(`尺寸資訊：\n${product.sizeInfo}`);
-  if (product.colors) parts.push(`顏色：${product.colors}`);
-  return parts.join('\n\n').trim();
+  const modelInfo = product.modelInfo || buildAutoModelInfo(product);
+  return [
+    'PRODUCT INFO',
+    product.description || '',
+    '',
+    `材質Fabric：${product.fabric || ''}`,
+    `尺寸Size : ${product.sizes || ''}`,
+    '',
+    'Size Info',
+    product.sizeInfo || '',
+    '',
+    '模特資訊 MODEL INFO ：',
+    modelInfo,
+    '',
+    '＝＝＝＝＝＝＝＝＝＝＝＝＝＝',
+    '',
+    '歡迎光臨GUBAN',
+    '',
+    '我們很喜歡與人聊天！所以下單前可以私訊小編～',
+    '告訴我們你目前煩惱的問題！',
+    '',
+    '如有任何問題歡迎詢問',
+    '官方LINE ID : @102rxpce (要加@呦～)',
+    'IG : guban_store',
+    '回覆時間 : 11:00-20:00',
+    '有其他商品的問題，也歡迎詢問小編～'
+  ].join('\n').trim();
 }
 
 function toShopeeCsvRow(product) {
@@ -413,6 +458,7 @@ function buildShopeeReadablePreview(products = [], maxItems = 2) {
       `- 尺寸：${product.sizes || '未填'}`,
       `- 顏色：${product.colors || '未填'}`,
       `- 材質：${product.fabric || '未填'}`,
+      `- 模特資訊：${product.modelInfo || buildAutoModelInfo(product) || '未填'}`,
       `- 圖片數：${(product.imageLinks?.length || 0) + (product.uploadedImages?.length || 0)}`
     ].join('\n'));
   });
