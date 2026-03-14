@@ -10,6 +10,7 @@ app.use(express.json());
 
 const DATA_DIR = path.join(__dirname, 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
+const LISTING_SESSION_FILE = path.join(DATA_DIR, 'listing-session.json');
 const PLAYWRIGHT_PROFILE_DIR = path.join(__dirname, 'playwright-profile');
 
 function ensureMemoryStore() {
@@ -18,6 +19,9 @@ function ensureMemoryStore() {
   }
   if (!fs.existsSync(MEMORY_FILE)) {
     fs.writeFileSync(MEMORY_FILE, JSON.stringify({ notes: [] }, null, 2), 'utf8');
+  }
+  if (!fs.existsSync(LISTING_SESSION_FILE)) {
+    fs.writeFileSync(LISTING_SESSION_FILE, JSON.stringify({ sessionMode: null }, null, 2), 'utf8');
   }
 }
 
@@ -59,6 +63,246 @@ function removeMemory(content) {
   data.notes = data.notes.filter(note => note.content !== content.trim());
   saveMemory(data);
   return before !== data.notes.length;
+}
+
+function loadListingSession() {
+  ensureMemoryStore();
+  try {
+    return JSON.parse(fs.readFileSync(LISTING_SESSION_FILE, 'utf8'));
+  } catch (e) {
+    return { sessionMode: null };
+  }
+}
+
+function saveListingSession(session) {
+  ensureMemoryStore();
+  fs.writeFileSync(LISTING_SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function createEmptyProduct(id) {
+  const product = {
+    id,
+    status: 'draft',
+    title: '',
+    price: '',
+    description: '',
+    fabric: '',
+    sizes: '',
+    sizeInfo: '',
+    colors: '',
+    stock: '',
+    category: '',
+    imageLinks: [],
+    uploadedImages: [],
+    notes: '',
+    missingFields: [],
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  product.missingFields = computeMissingFields(product);
+  return product;
+}
+
+function computeMissingFields(product) {
+  const missing = [];
+  if (!product.title) missing.push('商品名稱');
+  if (!product.price) missing.push('售價');
+  if (!product.description) missing.push('商品描述');
+  if (!product.fabric) missing.push('材質');
+  if (!product.sizes) missing.push('尺寸');
+  if (!product.sizeInfo) missing.push('尺寸資訊');
+  if (!product.colors) missing.push('顏色');
+  if (!product.stock) missing.push('庫存');
+  if (!product.category) missing.push('分類');
+  if ((!product.imageLinks || product.imageLinks.length === 0) && (!product.uploadedImages || product.uploadedImages.length === 0)) {
+    missing.push('圖片素材');
+  }
+  return missing;
+}
+
+function computeProductStatus(product) {
+  return product.missingFields.length === 0 ? 'complete' : 'draft';
+}
+
+function createListingSession() {
+  const session = {
+    sessionMode: 'listing_batch',
+    sessionStatus: 'collecting',
+    currentDraftId: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    products: [createEmptyProduct(1)]
+  };
+  saveListingSession(session);
+  return session;
+}
+
+function getCurrentDraft(session) {
+  return session.products.find(p => p.id === session.currentDraftId) || null;
+}
+
+function addNextProduct(session) {
+  const nextId = (session.products.at(-1)?.id || 0) + 1;
+  session.products.push(createEmptyProduct(nextId));
+  session.currentDraftId = nextId;
+  session.updatedAt = nowIso();
+  saveListingSession(session);
+  return session;
+}
+
+function updateCurrentDraft(session, patch) {
+  const product = getCurrentDraft(session);
+  if (!product) return session;
+
+  const fields = ['title', 'price', 'description', 'fabric', 'sizes', 'sizeInfo', 'colors', 'stock', 'category', 'notes'];
+  for (const field of fields) {
+    if (typeof patch[field] === 'string' && patch[field].trim()) {
+      product[field] = patch[field].trim();
+    }
+  }
+
+  product.updatedAt = nowIso();
+  product.missingFields = computeMissingFields(product);
+  product.status = computeProductStatus(product);
+  session.updatedAt = nowIso();
+  saveListingSession(session);
+  return session;
+}
+
+function appendImageLink(session, imageUrl) {
+  const product = getCurrentDraft(session);
+  if (!product || !imageUrl) return session;
+  product.imageLinks = [...new Set([...(product.imageLinks || []), imageUrl])];
+  product.updatedAt = nowIso();
+  product.missingFields = computeMissingFields(product);
+  product.status = computeProductStatus(product);
+  session.updatedAt = nowIso();
+  saveListingSession(session);
+  return session;
+}
+
+function getBatchSummary(session) {
+  const completeCount = session.products.filter(p => p.status === 'complete').length;
+  const incompleteCount = session.products.length - completeCount;
+  return {
+    totalProducts: session.products.length,
+    currentDraftId: session.currentDraftId,
+    completeCount,
+    incompleteCount
+  };
+}
+
+const LISTING_FIELD_MAP = {
+  '商品名稱': 'title',
+  '售價': 'price',
+  '商品描述': 'description',
+  '材質': 'fabric',
+  '尺寸': 'sizes',
+  '尺寸資訊': 'sizeInfo',
+  '顏色': 'colors',
+  '庫存': 'stock',
+  '分類': 'category',
+  '備註': 'notes',
+  '圖片連結': 'imageLinks'
+};
+
+function extractUrls(text = '') {
+  return text.match(/https?:\/\/[^\s]+/g) || [];
+}
+
+function parseListingMessage(text = '') {
+  const result = { patch: {}, imageLinks: [] };
+  const lines = text.split('\n');
+  let currentMultilineField = null;
+  let multilineBuffer = [];
+
+  function flushMultilineField() {
+    if (!currentMultilineField) return;
+    const value = multilineBuffer.join('\n').trim();
+    if (value) result.patch[currentMultilineField] = value;
+    currentMultilineField = null;
+    multilineBuffer = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const match = line.match(/^([^:：]+)\s*[:：]\s*(.*)$/);
+    if (match) {
+      const fieldName = match[1].trim();
+      const value = match[2].trim();
+      flushMultilineField();
+      const key = LISTING_FIELD_MAP[fieldName];
+      if (!key) continue;
+
+      if (key === 'imageLinks') {
+        result.imageLinks.push(...extractUrls(value));
+        continue;
+      }
+
+      if (key === 'sizeInfo' && !value) {
+        currentMultilineField = 'sizeInfo';
+        multilineBuffer = [];
+        continue;
+      }
+
+      result.patch[key] = value;
+      continue;
+    }
+
+    if (currentMultilineField) {
+      multilineBuffer.push(line);
+    }
+  }
+
+  flushMultilineField();
+  result.imageLinks = [...new Set(result.imageLinks)];
+  return result;
+}
+
+function isListingBatchMode(session) {
+  return session?.sessionMode === 'listing_batch';
+}
+
+function formatCurrentProduct(product) {
+  return [
+    '目前商品資料：',
+    `- 商品名稱：${product.title || '未填'}`,
+    `- 售價：${product.price || '未填'}`,
+    `- 商品描述：${product.description || '未填'}`,
+    `- 材質：${product.fabric || '未填'}`,
+    `- 尺寸：${product.sizes || '未填'}`,
+    `- 尺寸資訊：${product.sizeInfo || '未填'}`,
+    `- 顏色：${product.colors || '未填'}`,
+    `- 庫存：${product.stock || '未填'}`,
+    `- 分類：${product.category || '未填'}`,
+    `- 圖片連結數：${product.imageLinks?.length || 0}`,
+    `- 上傳圖片數：${product.uploadedImages?.length || 0}`
+  ].join('\n');
+}
+
+function formatMissingReport(session) {
+  const lines = ['目前商品缺漏狀況如下：', ''];
+  for (const product of session.products) {
+    product.missingFields = computeMissingFields(product);
+    product.status = computeProductStatus(product);
+    lines.push(`第 ${product.id} 筆：`);
+    if (product.missingFields.length === 0) {
+      lines.push('- 已完整');
+    } else {
+      for (const field of product.missingFields) {
+        lines.push(`- 缺 ${field}`);
+      }
+    }
+    lines.push('');
+  }
+  saveListingSession(session);
+  return lines.join('\n').trim();
 }
 
 function scoreMemoryMatch(question = '', memoryContent = '') {
@@ -138,7 +382,7 @@ function normalizeText(text = '') {
 }
 
 function isMentionedOrDirectCommand(text = '') {
-  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼|幫我回答|用之前的說法回答|這題有記憶嗎|幫我生成文案|生成文案|幫我整理商品文案/i.test(text);
+  return /(^|\s)g(\s|$)|@g|幫我整理|幫我摘要|幫我列待辦|幫我抓結論|總結一下|誰負責什麼|幫我回答|用之前的說法回答|這題有記憶嗎|幫我生成文案|生成文案|幫我整理商品文案|g上架|g下一筆|g 查看目前商品|g 檢查缺漏|g 生成蝦皮上架|g 生成shopify上架/i.test(text);
 }
 
 function extractBodyAfterCommand(text = '', commandRegex) {
@@ -482,8 +726,69 @@ app.post('/webhook/line', async (req, res) => {
       }
 
       let replyText = '我是 G，已成功連線。';
+      let listingSession = loadListingSession();
 
-      if (!inGroup && /^(g\s*)?記住[:：]?/i.test(userText)) {
+      if (/^g上架$/i.test(userText)) {
+        listingSession = createListingSession();
+        replyText = '好的，已開始整理上架資料。\n\n請把商品資料陸續傳給我，可以一次傳多筆。\n每筆建議提供以下資訊：\n1. 商品名稱\n2. 售價\n3. 商品描述\n4. 材質\n5. 尺寸\n6. 尺寸資訊\n7. 顏色\n8. 庫存\n9. 分類\n10. 圖片素材（可貼連結或直接上傳圖片）\n\n切換下一筆請輸入：G下一筆\n完成後可輸入：\n- G 查看目前商品\n- G 檢查缺漏\n- G 生成蝦皮上架\n- G 生成Shopify上架';
+      } else if (/^g下一筆$/i.test(userText)) {
+        if (!isListingBatchMode(listingSession)) {
+          replyText = '如果你要開始整理上架資料，請先輸入：G上架';
+        } else {
+          listingSession = addNextProduct(listingSession);
+          replyText = '已建立下一筆商品，請繼續提供資料。';
+        }
+      } else if (/^g 查看目前商品$/i.test(userText)) {
+        if (!isListingBatchMode(listingSession)) {
+          replyText = '如果你要開始整理上架資料，請先輸入：G上架';
+        } else {
+          const product = getCurrentDraft(listingSession);
+          replyText = product ? formatCurrentProduct(product) : '目前找不到正在編輯的商品。';
+        }
+      } else if (/^g 檢查缺漏$/i.test(userText)) {
+        if (!isListingBatchMode(listingSession)) {
+          replyText = '如果你要開始整理上架資料，請先輸入：G上架';
+        } else {
+          replyText = formatMissingReport(listingSession);
+        }
+      } else if (/^g 生成蝦皮上架$/i.test(userText)) {
+        if (!isListingBatchMode(listingSession)) {
+          replyText = '目前還沒有商品資料，請先輸入：G上架';
+        } else {
+          const summary = getBatchSummary(listingSession);
+          replyText = `已開始生成蝦皮上架檔。\n\n本次可生成商品：\n- 完整商品：${summary.completeCount} 筆\n- 缺漏商品：${summary.incompleteCount} 筆\n\n若有缺漏，建議先輸入：\nG 檢查缺漏`;
+        }
+      } else if (/^g 生成shopify上架$/i.test(userText)) {
+        if (!isListingBatchMode(listingSession)) {
+          replyText = '目前還沒有商品資料，請先輸入：G上架';
+        } else {
+          const summary = getBatchSummary(listingSession);
+          replyText = `已開始生成 Shopify 上架檔。\n\n本次可生成商品：\n- 完整商品：${summary.completeCount} 筆\n- 缺漏商品：${summary.incompleteCount} 筆\n\n若有缺漏，建議先輸入：\nG 檢查缺漏`;
+        }
+      } else if (isListingBatchMode(listingSession)) {
+        const parsed = parseListingMessage(userText);
+        const hasPatch = Object.keys(parsed.patch).length > 0;
+        const hasImages = parsed.imageLinks.length > 0;
+
+        if (hasPatch || hasImages) {
+          if (hasPatch) {
+            listingSession = updateCurrentDraft(listingSession, parsed.patch);
+          }
+          if (hasImages) {
+            for (const imageUrl of parsed.imageLinks) {
+              listingSession = appendImageLink(listingSession, imageUrl);
+            }
+          }
+
+          const product = getCurrentDraft(listingSession);
+          const missingPreview = product?.missingFields?.slice(0, 3) || [];
+          replyText = missingPreview.length
+            ? `已記錄目前這筆商品資料。\n目前還缺：\n- ${missingPreview.join('\n- ')}`
+            : '已記錄目前這筆商品資料。這筆商品資料已完整。';
+        } else if (!inGroup) {
+          replyText = '目前正在整理上架資料。你可以直接補欄位內容，或輸入：\n- G下一筆\n- G 查看目前商品\n- G 檢查缺漏';
+        }
+      } else if (!inGroup && /^(g\s*)?記住[:：]?/i.test(userText)) {
         const body = extractBodyAfterCommand(userText, /^(g\s*)?記住[:：]?\s*/i);
         if (!body) {
           replyText = '請用這個格式：\nG 記住：\n（要我記住的內容）';
