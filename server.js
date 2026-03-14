@@ -394,6 +394,11 @@ function saveShopeeCsv(products = []) {
   return { fileName, filePath, csvContent };
 }
 
+function buildCsvPreview(csvContent = '', maxLines = 6) {
+  const lines = csvContent.split('\n').slice(0, maxLines);
+  return lines.join('\n');
+}
+
 function formatListingDebug(session, parsed) {
   const current = getCurrentDraft(session);
   return [
@@ -894,7 +899,8 @@ app.post('/webhook/line', async (req, res) => {
             replyText = '目前沒有完整商品可生成蝦皮上架檔。\n請先輸入：G 檢查缺漏';
           } else {
             const exportResult = saveShopeeCsv(completeProducts);
-            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n- 路徑：data/exports/${exportResult.fileName}`;
+            const preview = buildCsvPreview(exportResult.csvContent, 5);
+            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n\nCSV 預覽：\n${preview}`;
           }
         }
       } else if (/^g 生成shopify上架$/i.test(userText)) {
