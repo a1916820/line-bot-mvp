@@ -236,33 +236,49 @@ function parseListingMessage(text = '') {
     if (match) {
       const fieldName = match[1].trim();
       const value = match[2].trim();
-      flushMultilineField();
       const key = LISTING_FIELD_MAP[fieldName];
-      if (!key) continue;
 
-      if (key === 'imageLinks') {
-        result.imageLinks.push(...extractUrls(value));
+      if (key) {
+        flushMultilineField();
+
+        if (key === 'imageLinks') {
+          result.imageLinks.push(...extractUrls(value));
+          continue;
+        }
+
+        if (key === 'sizeInfo') {
+          if (value) {
+            result.patch[key] = value;
+          } else {
+            currentMultilineField = 'sizeInfo';
+            multilineBuffer = [];
+          }
+          continue;
+        }
+
+        result.patch[key] = value;
         continue;
       }
-
-      if (key === 'sizeInfo' && !value) {
-        currentMultilineField = 'sizeInfo';
-        multilineBuffer = [];
-        continue;
-      }
-
-      result.patch[key] = value;
-      continue;
     }
 
     if (currentMultilineField) {
       multilineBuffer.push(line);
+      continue;
+    }
+
+    const looseUrls = extractUrls(line);
+    if (looseUrls.length) {
+      result.imageLinks.push(...looseUrls);
     }
   }
 
   flushMultilineField();
   result.imageLinks = [...new Set(result.imageLinks)];
   return result;
+}
+
+function looksLikeListingFieldMessage(text = '') {
+  return /^(商品名稱|售價|商品描述|材質|尺寸|尺寸資訊|顏色|庫存|分類|備註|圖片連結)\s*[:：]/m.test(text) || extractUrls(text).length > 0;
 }
 
 function isListingBatchMode(session) {
@@ -765,29 +781,27 @@ app.post('/webhook/line', async (req, res) => {
           const summary = getBatchSummary(listingSession);
           replyText = `已開始生成 Shopify 上架檔。\n\n本次可生成商品：\n- 完整商品：${summary.completeCount} 筆\n- 缺漏商品：${summary.incompleteCount} 筆\n\n若有缺漏，建議先輸入：\nG 檢查缺漏`;
         }
-      } else if (isListingBatchMode(listingSession)) {
+      } else if (isListingBatchMode(listingSession) && !inGroup && looksLikeListingFieldMessage(userText)) {
         const parsed = parseListingMessage(userText);
         const hasPatch = Object.keys(parsed.patch).length > 0;
         const hasImages = parsed.imageLinks.length > 0;
 
-        if (hasPatch || hasImages) {
-          if (hasPatch) {
-            listingSession = updateCurrentDraft(listingSession, parsed.patch);
-          }
-          if (hasImages) {
-            for (const imageUrl of parsed.imageLinks) {
-              listingSession = appendImageLink(listingSession, imageUrl);
-            }
-          }
-
-          const product = getCurrentDraft(listingSession);
-          const missingPreview = product?.missingFields?.slice(0, 3) || [];
-          replyText = missingPreview.length
-            ? `已記錄目前這筆商品資料。\n目前還缺：\n- ${missingPreview.join('\n- ')}`
-            : '已記錄目前這筆商品資料。這筆商品資料已完整。';
-        } else if (!inGroup) {
-          replyText = '目前正在整理上架資料。你可以直接補欄位內容，或輸入：\n- G下一筆\n- G 查看目前商品\n- G 檢查缺漏';
+        if (hasPatch) {
+          listingSession = updateCurrentDraft(listingSession, parsed.patch);
         }
+        if (hasImages) {
+          for (const imageUrl of parsed.imageLinks) {
+            listingSession = appendImageLink(listingSession, imageUrl);
+          }
+        }
+
+        const product = getCurrentDraft(listingSession);
+        const missingPreview = product?.missingFields?.slice(0, 3) || [];
+        replyText = missingPreview.length
+          ? `已記錄目前這筆商品資料。\n目前還缺：\n- ${missingPreview.join('\n- ')}`
+          : '已記錄目前這筆商品資料。這筆商品資料已完整。';
+      } else if (isListingBatchMode(listingSession) && !inGroup) {
+        replyText = '目前正在整理上架資料。你可以直接補欄位內容，或輸入：\n- G下一筆\n- G 查看目前商品\n- G 檢查缺漏';
       } else if (!inGroup && /^(g\s*)?記住[:：]?/i.test(userText)) {
         const body = extractBodyAfterCommand(userText, /^(g\s*)?記住[:：]?\s*/i);
         if (!body) {
