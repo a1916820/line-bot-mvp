@@ -7,12 +7,14 @@ require('dotenv').config();
 
 const app = express();
 app.use(express.json());
+app.use('/exports', express.static(EXPORT_DIR));
 
 const DATA_DIR = path.join(__dirname, 'data');
 const EXPORT_DIR = path.join(DATA_DIR, 'exports');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const LISTING_SESSION_FILE = path.join(DATA_DIR, 'listing-session.json');
 const PLAYWRIGHT_PROFILE_DIR = path.join(__dirname, 'playwright-profile');
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
 
 function ensureMemoryStore() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -522,7 +524,8 @@ function saveShopeeCsv(products = []) {
   const filePath = path.join(EXPORT_DIR, fileName);
   const csvContent = generateShopeeCsv(products);
   fs.writeFileSync(filePath, csvContent, 'utf8');
-  return { fileName, filePath, csvContent };
+  const downloadUrl = `${String(PUBLIC_BASE_URL).replace(/\/$/, '')}/exports/${encodeURIComponent(fileName)}`;
+  return { fileName, filePath, csvContent, downloadUrl };
 }
 
 function buildCsvPreview(csvContent = '', maxLines = 6) {
@@ -1053,7 +1056,7 @@ app.post('/webhook/line', async (req, res) => {
           } else {
             const exportResult = saveShopeeCsv(completeProducts);
             const readablePreview = buildShopeeReadablePreview(completeProducts, 2);
-            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n\n預覽：\n${readablePreview}`;
+            replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n- 下載連結：${exportResult.downloadUrl}\n\n預覽：\n${readablePreview}`;
           }
         }
       } else if (/^g 生成shopify上架$/i.test(userText)) {
