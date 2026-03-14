@@ -321,6 +321,21 @@ function formatMissingReport(session) {
   return lines.join('\n').trim();
 }
 
+function formatListingDebug(session, parsed) {
+  const current = getCurrentDraft(session);
+  return [
+    'DEBUG',
+    `- sessionMode: ${session?.sessionMode || '(none)'}`,
+    `- sessionStatus: ${session?.sessionStatus || '(none)'}`,
+    `- currentDraftId: ${session?.currentDraftId || '(none)'}`,
+    `- productsCount: ${session?.products?.length || 0}`,
+    `- parsedPatchKeys: ${Object.keys(parsed.patch || {}).join(', ') || '(none)'}`,
+    `- parsedImageLinks: ${parsed.imageLinks?.length || 0}`,
+    `- currentTitle: ${current?.title || '(empty)'}`,
+    `- currentPrice: ${current?.price || '(empty)'}`
+  ].join('\n');
+}
+
 function scoreMemoryMatch(question = '', memoryContent = '') {
   const q = question.toLowerCase();
   const m = memoryContent.toLowerCase();
@@ -782,7 +797,9 @@ app.post('/webhook/line', async (req, res) => {
           replyText = `已開始生成 Shopify 上架檔。\n\n本次可生成商品：\n- 完整商品：${summary.completeCount} 筆\n- 缺漏商品：${summary.incompleteCount} 筆\n\n若有缺漏，建議先輸入：\nG 檢查缺漏`;
         }
       } else if (isListingBatchMode(listingSession) && !inGroup && looksLikeListingFieldMessage(userText)) {
-        const parsed = parseListingMessage(userText);
+        const debugMode = /(^|\s)debug(\s|$)/i.test(userText);
+        const cleanInput = userText.replace(/(^|\s)debug(\s|$)/ig, ' ').trim();
+        const parsed = parseListingMessage(cleanInput);
         const hasPatch = Object.keys(parsed.patch).length > 0;
         const hasImages = parsed.imageLinks.length > 0;
 
@@ -795,11 +812,15 @@ app.post('/webhook/line', async (req, res) => {
           }
         }
 
-        const product = getCurrentDraft(listingSession);
-        const missingPreview = product?.missingFields?.slice(0, 3) || [];
-        replyText = missingPreview.length
-          ? `已記錄目前這筆商品資料。\n目前還缺：\n- ${missingPreview.join('\n- ')}`
-          : '已記錄目前這筆商品資料。這筆商品資料已完整。';
+        if (debugMode) {
+          replyText = formatListingDebug(listingSession, parsed);
+        } else {
+          const product = getCurrentDraft(listingSession);
+          const missingPreview = product?.missingFields?.slice(0, 3) || [];
+          replyText = missingPreview.length
+            ? `已記錄目前這筆商品資料。\n目前還缺：\n- ${missingPreview.join('\n- ')}`
+            : '已記錄目前這筆商品資料。這筆商品資料已完整。';
+        }
       } else if (isListingBatchMode(listingSession) && !inGroup) {
         replyText = '目前正在整理上架資料。你可以直接補欄位內容，或輸入：\n- G下一筆\n- G 查看目前商品\n- G 檢查缺漏';
       } else if (!inGroup && /^(g\s*)?記住[:：]?/i.test(userText)) {
