@@ -7,7 +7,6 @@ require('dotenv').config();
 
 const app = express();
 app.use(express.json());
-app.use('/exports', express.static(EXPORT_DIR));
 
 const DATA_DIR = path.join(__dirname, 'data');
 const EXPORT_DIR = path.join(DATA_DIR, 'exports');
@@ -15,6 +14,8 @@ const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const LISTING_SESSION_FILE = path.join(DATA_DIR, 'listing-session.json');
 const PLAYWRIGHT_PROFILE_DIR = path.join(__dirname, 'playwright-profile');
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
+
+app.use('/exports', express.static(EXPORT_DIR));
 
 function ensureMemoryStore() {
   if (!fs.existsSync(DATA_DIR)) {
