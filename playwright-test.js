@@ -1,33 +1,8 @@
-const { chromium } = require('playwright');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
 const sharp = require('sharp');
 const Tesseract = require('tesseract.js');
-
-function isCandidateDetailImage(src = '') {
-const url = src.toLowerCase();
-
-if (!url.startsWith('http')) return false;
-if (url.includes('s.gif')) return false;
-if (url.endsWith('.gif')) return false;
-if (url.includes('icon')) return false;
-if (url.includes('logo')) return false;
-if (url.includes('avatar')) return false;
-if (url.includes('tbcdn')) return false;
-
-const looksLikeDetailHost =
-url.includes('img.alicdn.com/imgextra/') ||
-url.includes('gw.alicdn.com/bao/uploaded/');
-
-const looksLikeImageFile =
-url.includes('.jpg') ||
-url.includes('.jpeg') ||
-url.includes('.png') ||
-url.includes('.webp');
-
-return looksLikeDetailHost && looksLikeImageFile;
-}
 
 function toTraditional(text = '') {
 return (text || '')
@@ -80,25 +55,6 @@ return (text || '')
 .replace(/针织/g, '針織');
 }
 
-async function autoScroll(page) {
-await page.evaluate(async () => {
-await new Promise(resolve => {
-let totalHeight = 0;
-const distance = 800;
-const timer = setInterval(() => {
-const scrollHeight = document.body.scrollHeight;
-window.scrollBy(0, distance);
-totalHeight += distance;
-
-if (totalHeight >= scrollHeight) {
-clearInterval(timer);
-resolve();
-}
-}, 800);
-});
-});
-}
-
 async function downloadImage(url, filePath) {
 const response = await axios.get(url, {
 responseType: 'arraybuffer',
@@ -136,4 +92,41 @@ async function runOcrOnLocalImage(filePath) {
 const result = await Tesseract.recognize(filePath, 'chi_sim', {
 logger: m => {
 if (m.status === 'recognizing text') {
-console.log(`[OCR] progress ${Math.round((m.progress || 0
+console.log(`[OCR] progress ${Math.round((m.progress || 0) * 100)}%`);
+}
+}
+});
+
+return toTraditional(result.data.text || '');
+}
+
+async function run() {
+// 這裡改成你第 17 張圖片的網址
+const imageUrl =‘https://img.alicdn.com/imgextra/i3/13042061/O1CN01vqF2mb1R5zEORV9u4_!!13042061.gif’
+'把第17張圖片網址貼在這裡';
+
+const workDir = path.join(__dirname, 'ocr-work');
+if (!fs.existsSync(workDir)) {
+fs.mkdirSync(workDir, { recursive: true });
+}
+
+const originalPath = path.join(workDir, 'size-original.jpg');
+const processedPath = path.join(workDir, 'size-processed.png');
+
+console.log('Downloading image...');
+await downloadImage(imageUrl, originalPath);
+
+console.log('Preprocessing image...');
+await preprocessImage(originalPath, processedPath);
+
+console.log('Running OCR on processed image...');
+const text = await runOcrOnLocalImage(processedPath);
+
+console.log('================ OCR RESULT START ================');
+console.log(text);
+console.log('================ OCR RESULT END ==================');
+}
+
+run().catch(error => {
+console.error('Preprocessed OCR test failed:', error);
+});
