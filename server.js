@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const XLSX = require('xlsx');
 const { chromium } = require('playwright');
 require('dotenv').config();
 
@@ -10,6 +11,8 @@ app.use(express.json());
 
 const DATA_DIR = path.join(__dirname, 'data');
 const EXPORT_DIR = path.join(DATA_DIR, 'exports');
+const TEMPLATE_DIR = path.join(__dirname, 'templates');
+const SHOPEE_TEMPLATE_FILE = path.join(TEMPLATE_DIR, 'shopee-mass-upload-template.xlsx');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const LISTING_SESSION_FILE = path.join(DATA_DIR, 'listing-session.json');
 const PLAYWRIGHT_PROFILE_DIR = path.join(__dirname, 'playwright-profile');
@@ -29,6 +32,9 @@ function ensureMemoryStore() {
   }
   if (!fs.existsSync(EXPORT_DIR)) {
     fs.mkdirSync(EXPORT_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(TEMPLATE_DIR)) {
+    fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
   }
 }
 
@@ -104,6 +110,13 @@ function createEmptyProduct(id) {
     colors: '',
     stock: '',
     category: '',
+    categoryId: '',
+    weight: '',
+    length: '',
+    width: '',
+    height: '',
+    coverImage: '',
+    logistics: '',
     imageLinks: [],
     uploadedImages: [],
     notes: '',
@@ -166,7 +179,7 @@ function updateCurrentDraft(session, patch) {
   const product = getCurrentDraft(session);
   if (!product) return session;
 
-  const fields = ['title', 'price', 'description', 'fabric', 'sizes', 'sizeInfo', 'modelInfo', 'colors', 'stock', 'category', 'notes'];
+  const fields = ['title', 'price', 'description', 'fabric', 'sizes', 'sizeInfo', 'modelInfo', 'colors', 'stock', 'category', 'categoryId', 'weight', 'length', 'width', 'height', 'coverImage', 'logistics', 'notes'];
   for (const field of fields) {
     if (typeof patch[field] === 'string' && patch[field].trim()) {
       product[field] = patch[field].trim();
@@ -216,6 +229,15 @@ const LISTING_FIELD_MAP = {
   '顏色': 'colors',
   '庫存': 'stock',
   '分類': 'category',
+  '分類ID': 'categoryId',
+  '分類 Id': 'categoryId',
+  '重量': 'weight',
+  '長度': 'length',
+  '寬度': 'width',
+  '高度': 'height',
+  '主圖': 'coverImage',
+  '主商品圖片': 'coverImage',
+  '配送方式': 'logistics',
   '備註': 'notes',
   '圖片連結': 'imageLinks'
 };
@@ -315,6 +337,13 @@ function formatCurrentProduct(product) {
     `- 顏色：${product.colors || '未填'}`,
     `- 庫存：${product.stock || '未填'}`,
     `- 分類：${product.category || '未填'}`,
+    `- 分類ID：${product.categoryId || '未填'}`,
+    `- 重量：${product.weight || '未填'}`,
+    `- 長度：${product.length || '未填'}`,
+    `- 寬度：${product.width || '未填'}`,
+    `- 高度：${product.height || '未填'}`,
+    `- 主圖：${product.coverImage || '未填'}`,
+    `- 配送方式：${product.logistics || '未填'}`,
     `- 圖片連結數：${product.imageLinks?.length || 0}`,
     `- 上傳圖片數：${product.uploadedImages?.length || 0}`
   ].join('\n');
@@ -477,38 +506,105 @@ function buildShopeeDescription(product) {
   ].join('\n').trim();
 }
 
-function toShopeeCsvRow(product) {
+function normalizeLogistics(logistics = '') {
+  const text = String(logistics || '');
   return {
-    '商品名稱': product.title || '',
-    '商品描述': buildShopeeDescription(product),
-    '價格': product.price || '',
-    '分類': product.category || '',
-    '庫存': product.stock || '',
-    '規格名稱1': product.sizes ? '尺寸' : '',
-    '規格選項1': product.sizes || '',
-    '規格名稱2': product.colors ? '顏色' : '',
-    '規格選項2': product.colors || '',
-    '圖片1': product.imageLinks?.[0] || '',
-    '圖片2': product.imageLinks?.[1] || '',
-    '圖片3': product.imageLinks?.[2] || ''
+    sevenEleven: /7-?11|7-?eleven/.test(text) ? '開啟' : '',
+    family: /全家/.test(text) ? '開啟' : '',
+    shopDelivery: /蝦皮店到店/.test(text) ? '開啟' : '',
+    homeStandard: /店到家宅配|標準包裹/.test(text) ? '開啟' : '',
+    homeLarge: /大型包裹/.test(text) ? '開啟' : ''
+  };
+}
+
+function buildShopeeTemplateRow(product) {
+  const logistics = normalizeLogistics(product.logistics);
+  const coverImage = product.coverImage || product.imageLinks?.[0] || '';
+  const allImages = product.imageLinks || [];
+
+  return {
+    'ps_category': product.categoryId || '',
+    'ps_product_name': product.title || '',
+    'ps_product_description': buildShopeeDescription(product),
+    'ps_minimum_purchase_quantity': '1',
+    'ps_sku_parent_short': '',
+    'ps_dangerous_goods': 'No',
+    'et_title_variation_integration_no': '',
+    'et_title_variation_1': product.sizes ? '尺寸' : '',
+    'et_title_option_for_variation_1': product.sizes || '',
+    'et_title_image_per_variation': '',
+    'et_title_variation_2': product.colors ? '顏色' : '',
+    'et_title_option_for_variation_2': product.colors || '',
+    'ps_price': product.price || '',
+    'ps_stock': product.stock || '',
+    'ps_sku_short': '',
+    'ps_new_size_chart': '',
+    'et_title_size_chart': '',
+    'ps_gtin_code': '',
+    'ps_item_cover_image': coverImage,
+    'ps_item_image_1': allImages[0] || '',
+    'ps_item_image_2': allImages[1] || '',
+    'ps_item_image_3': allImages[2] || '',
+    'ps_item_image_4': allImages[3] || '',
+    'ps_item_image_5': allImages[4] || '',
+    'ps_item_image_6': allImages[5] || '',
+    'ps_item_image_7': allImages[6] || '',
+    'ps_item_image_8': allImages[7] || '',
+    'ps_weight': product.weight || '',
+    'ps_length': product.length || '',
+    'ps_width': product.width || '',
+    'ps_height': product.height || '',
+    'channel_id.30005': logistics.sevenEleven,
+    'channel_id.30006': logistics.family,
+    'channel_id.30015': logistics.shopDelivery,
+    'channel_id.30017': logistics.homeStandard,
+    'channel_id.30030': logistics.homeLarge,
+    'ps_product_pre_order_dts': '',
+    'et_title_reason': ''
   };
 }
 
 function generateShopeeCsv(products = []) {
-  const rows = products.map(toShopeeCsvRow);
+  const rows = products.map(buildShopeeTemplateRow);
   const headers = [
-    '商品名稱',
-    '商品描述',
-    '價格',
-    '分類',
-    '庫存',
-    '規格名稱1',
-    '規格選項1',
-    '規格名稱2',
-    '規格選項2',
-    '圖片1',
-    '圖片2',
-    '圖片3'
+    'ps_category',
+    'ps_product_name',
+    'ps_product_description',
+    'ps_minimum_purchase_quantity',
+    'ps_sku_parent_short',
+    'ps_dangerous_goods',
+    'et_title_variation_integration_no',
+    'et_title_variation_1',
+    'et_title_option_for_variation_1',
+    'et_title_image_per_variation',
+    'et_title_variation_2',
+    'et_title_option_for_variation_2',
+    'ps_price',
+    'ps_stock',
+    'ps_sku_short',
+    'ps_new_size_chart',
+    'et_title_size_chart',
+    'ps_gtin_code',
+    'ps_item_cover_image',
+    'ps_item_image_1',
+    'ps_item_image_2',
+    'ps_item_image_3',
+    'ps_item_image_4',
+    'ps_item_image_5',
+    'ps_item_image_6',
+    'ps_item_image_7',
+    'ps_item_image_8',
+    'ps_weight',
+    'ps_length',
+    'ps_width',
+    'ps_height',
+    'channel_id.30005',
+    'channel_id.30006',
+    'channel_id.30015',
+    'channel_id.30017',
+    'channel_id.30030',
+    'ps_product_pre_order_dts',
+    'et_title_reason'
   ];
 
   const lines = [headers.join(',')];
@@ -518,15 +614,68 @@ function generateShopeeCsv(products = []) {
   return lines.join('\n');
 }
 
-function saveShopeeCsv(products = []) {
+function buildShopeeTemplateRows(products = []) {
+  return products.map(buildShopeeTemplateRow);
+}
+
+function saveShopeeWorkbook(products = []) {
   ensureMemoryStore();
+  if (!fs.existsSync(SHOPEE_TEMPLATE_FILE)) {
+    throw new Error('SHOPEE_TEMPLATE_FILE_MISSING');
+  }
+
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = `shopee-export-${timestamp}.csv`;
+  const fileName = `shopee-export-${timestamp}.xlsx`;
   const filePath = path.join(EXPORT_DIR, fileName);
-  const csvContent = generateShopeeCsv(products);
-  fs.writeFileSync(filePath, csvContent, 'utf8');
+  const workbook = XLSX.readFile(SHOPEE_TEMPLATE_FILE);
+  const sheetName = '上傳模板';
+  const worksheet = workbook.Sheets[sheetName];
+
+  if (!worksheet) {
+    throw new Error('SHOPEE_TEMPLATE_SHEET_MISSING');
+  }
+
+  const rows = buildShopeeTemplateRows(products);
+  const headerRowIndex = 1;
+  const dataStartRowIndex = 8;
+  const headers = [];
+  let col = 0;
+  while (true) {
+    const cellRef = XLSX.utils.encode_cell({ c: col, r: headerRowIndex - 1 });
+    const cell = worksheet[cellRef];
+    if (!cell || !cell.v) break;
+    headers.push(String(cell.v).trim());
+    col += 1;
+  }
+
+  for (let rowIndex = dataStartRowIndex; rowIndex < dataStartRowIndex + 500; rowIndex++) {
+    for (let colIndex = 0; colIndex < headers.length; colIndex++) {
+      const ref = XLSX.utils.encode_cell({ c: colIndex, r: rowIndex - 1 });
+      if (worksheet[ref]) delete worksheet[ref];
+    }
+  }
+
+  rows.forEach((row, rowOffset) => {
+    headers.forEach((header, colIndex) => {
+      const value = row[header] || '';
+      const ref = XLSX.utils.encode_cell({ c: colIndex, r: dataStartRowIndex - 1 + rowOffset });
+      worksheet[ref] = { t: 's', v: String(value) };
+    });
+  });
+
+  worksheet['!ref'] = XLSX.utils.encode_range({
+    s: { c: 0, r: 0 },
+    e: { c: Math.max(headers.length - 1, 0), r: dataStartRowIndex - 1 + Math.max(rows.length, 1) }
+  });
+
+  XLSX.writeFile(workbook, filePath);
   const downloadUrl = `${String(PUBLIC_BASE_URL).replace(/\/$/, '')}/exports/${encodeURIComponent(fileName)}`;
-  return { fileName, filePath, csvContent, downloadUrl };
+  return {
+    fileName,
+    filePath,
+    downloadUrl,
+    previewRows: rows
+  };
 }
 
 function buildCsvPreview(csvContent = '', maxLines = 6) {
@@ -544,11 +693,15 @@ function buildShopeeReadablePreview(products = [], maxItems = 2) {
       `- 商品名稱：${product.title || '未填'}`,
       `- 價格：${product.price || '未填'}`,
       `- 分類：${product.category || '未填'}`,
+      `- 分類ID：${product.categoryId || '未填'}`,
       `- 庫存：${product.stock || '未填'}`,
       `- 尺寸：${product.sizes || '未填'}`,
       `- 顏色：${product.colors || '未填'}`,
       `- 材質：${product.fabric || '未填'}`,
       `- 模特資訊：${product.modelInfo || buildAutoModelInfo(product) || '未填'}`,
+      `- 重量：${product.weight || '未填'}`,
+      `- 長寬高：${product.length || '未填'} / ${product.width || '未填'} / ${product.height || '未填'}`,
+      `- 配送方式：${product.logistics || '未填'}`,
       `- 圖片數：${(product.imageLinks?.length || 0) + (product.uploadedImages?.length || 0)}`
     ].join('\n'));
   });
@@ -1055,7 +1208,7 @@ app.post('/webhook/line', async (req, res) => {
           if (!completeProducts.length) {
             replyText = '目前沒有完整商品可生成蝦皮上架檔。\n請先輸入：G 檢查缺漏';
           } else {
-            const exportResult = saveShopeeCsv(completeProducts);
+            const exportResult = saveShopeeWorkbook(completeProducts);
             const readablePreview = buildShopeeReadablePreview(completeProducts, 2);
             replyText = `蝦皮上架檔已生成。\n\n- 完整商品：${completeProducts.length} 筆\n- 缺漏商品：${incompleteProducts.length} 筆\n- 檔名：${exportResult.fileName}\n- 下載連結：${exportResult.downloadUrl}\n\n預覽：\n${readablePreview}`;
           }
