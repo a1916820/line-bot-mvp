@@ -344,18 +344,104 @@ function csvEscape(value = '') {
   return stringValue;
 }
 
+function getOrderedSizes(product) {
+  return String(product.sizes || '')
+    .split(/[\/、,\s]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
 function pickRecommendedSize(product) {
-  const rawSizes = String(product.sizes || '').split(/[\/、,\s]+/).map(s => s.trim()).filter(Boolean);
+  const rawSizes = getOrderedSizes(product);
   if (!rawSizes.length) return 'S';
   const normalized = rawSizes.map(s => s.toUpperCase());
-  if (normalized.includes('S')) return 'S';
-  if (normalized.includes('M')) return 'M';
+  if (normalized.includes('S')) return rawSizes[normalized.indexOf('S')];
+  if (normalized.includes('M')) return rawSizes[normalized.indexOf('M')];
   return rawSizes[0];
 }
 
+function parseSizeInfoMetrics(sizeInfo = '') {
+  const metrics = [];
+  const lines = String(sizeInfo || '').split('\n').map(line => line.trim()).filter(Boolean);
+
+  for (const line of lines) {
+    const sizeMatch = line.match(/^([A-Za-z0-9]+)/);
+    if (!sizeMatch) continue;
+
+    const size = sizeMatch[1].toUpperCase();
+    const values = [...line.matchAll(/(\d+(?:\.\d+)?)/g)].map(match => Number(match[1]));
+    if (!values.length) continue;
+
+    const chest = values.find(v => v >= 35 && v <= 90) || null;
+    const length = values.find(v => v >= 45 && v <= 90 && v !== chest) || null;
+
+    metrics.push({ size, chest, length, values });
+  }
+
+  return metrics;
+}
+
+function inferModelProfileFromSizeInfo(product) {
+  const sizeMetrics = parseSizeInfoMetrics(product.sizeInfo);
+  const orderedSizes = getOrderedSizes(product).map(s => s.toUpperCase());
+  const recommendedSize = pickRecommendedSize(product).toUpperCase();
+
+  if (!sizeMetrics.length) {
+    return {
+      height: 160,
+      weight: 45,
+      size: recommendedSize,
+      fit: '標準'
+    };
+  }
+
+  const preferredMetric = sizeMetrics.find(item => item.size === recommendedSize)
+    || sizeMetrics.find(item => orderedSizes.includes(item.size))
+    || sizeMetrics[0];
+
+  const chest = preferredMetric.chest || 48;
+  const length = preferredMetric.length || 58;
+
+  let height = 160;
+  let weight = 45;
+  let fit = '標準';
+
+  if (chest <= 43) {
+    height = 155;
+    weight = 42;
+    fit = '合身偏小';
+  } else if (chest <= 47) {
+    height = 160;
+    weight = 45;
+    fit = '合身';
+  } else if (chest <= 52) {
+    height = 165;
+    weight = 48;
+    fit = '標準';
+  } else if (chest <= 58) {
+    height = 168;
+    weight = 50;
+    fit = '微寬鬆';
+  } else {
+    height = 170;
+    weight = 55;
+    fit = '寬鬆';
+  }
+
+  if (length >= 68) height += 2;
+  if (length <= 52) height -= 2;
+
+  return {
+    height,
+    weight,
+    size: preferredMetric.size || recommendedSize,
+    fit
+  };
+}
+
 function buildAutoModelInfo(product) {
-  const recommendedSize = pickRecommendedSize(product);
-  return `160cm / 45kg，建議著 ${recommendedSize}`;
+  const inferred = inferModelProfileFromSizeInfo(product);
+  return `${inferred.height}cm / ${inferred.weight}kg，著${inferred.size}（${inferred.fit}）`;
 }
 
 function buildShopeeDescription(product) {
